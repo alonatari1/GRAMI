@@ -14,7 +14,17 @@ intervalBetweenTests = 1000 # Time between probe packets in microseconds.
 topologyHostEtherMAC = "00:11:12:13:14:15" # Constant for mac of packets in my topology analyzer application.
 topologyControllerEtherMAC = "00:11:12:13:15:15" # Constant for mac that order the controller to activate the topology application.
 analyzeEtherMAC = "00:11:12:13:14:16" # Constant for mac that order the controller to analyze the network
+probeEtherMAC = "00:11:12:13:14:17" # Constant for mac that order the controller to analyze the network
+appendRTPMAC = "00:11:12:13:14:18" # Constant for mac that order the controller to append RTP
 testStarMAC = "00:11:33:44:55:66" # Constant for mac of specific test in star topology.
+
+
+DistributeMAC = "00:11:12:13:14:00" # Constant for mac that order the controller to analyze the network
+ReturnAndTagMAC = "00:11:12:13:14:01" # Constant for mac that order the controller to analyze the network
+ReturnNoTagMAC = "00:11:12:13:14:02" # Constant for mac that order the controller to analyze the network
+RTPMAC = "00:11:12:13:14:03" # Constant for mac that order the controller to analyze the network
+
+
 
 ''' Constants for ether types and VLANs'''
 ''' Manual activation - no part of GRAMI '''
@@ -53,14 +63,14 @@ lastSwitchIDSize = 2
 
 #define the positions of all the interesting fields
 timeStampPos = 0 - timeStampSize
-measurementRoundPos = timeStampPos - measurementRoundSize
-directionForwardPos = measurementRoundPos - directionForwardSize
+measurementRoundPos = timeStampPos - measurementRoundSize#-10
+directionForwardPos = measurementRoundPos - directionForwardSize#-12
 prevSwitchIDPos = directionForwardPos - prevSwitchIDSize
 directionReturnPos = prevSwitchIDPos - directionReturnSize
 lastSwitchIDPos = directionReturnPos - lastSwitchIDSize
 
 '''Constant for separators'''
-MPDataSeperatorData = "::"
+MPDataSeperatorData = ":$$:"
 numberOfMPsSeperator = "-"
 MPsSeperator = ","
 topologyDataSeparator = "{"
@@ -74,7 +84,9 @@ def getID1(packet):
     :param packet: The packet to extract the data from.
     :return:
     """
-    return struct.unpack('>h',str(packet)[lastSwitchIDPos:lastSwitchIDPos+lastSwitchIDSize])[0]
+    if Ether(str(packet)).src == ReturnAndTagMAC:
+        return NULL_ID
+    return Ether(str(packet))[Dot1Q:1].vlan
 
 
 def getID2(packet):
@@ -83,7 +95,11 @@ def getID2(packet):
     :param packet: The packet to extract the data from.
     :return:
     """
-    return struct.unpack('>h',str(packet)[prevSwitchIDPos:prevSwitchIDPos+prevSwitchIDSize])[0]
+    
+    if Ether(str(packet)).src == ReturnAndTagMAC:
+        return Ether(str(packet))[Dot1Q:1].vlan
+    
+    return Ether(str(packet))[Dot1Q:2].vlan
 
 
 def getPacketState(packet):
@@ -93,7 +109,9 @@ def getPacketState(packet):
     :param packet: The packet to extract the data from.
     :return:
     """
-    return struct.unpack('>h',str(packet)[directionForwardPos:directionForwardPos+directionForwardSize])[0]
+    if Dot1Q not in Ether(str(packet)):
+        return -1
+    return Ether(str(packet)).src
 
 
 def getReturnState3FlowEntirs(packet):
@@ -111,7 +129,10 @@ def getMeasurementRound(packet):
     :param packet: The packet to extract the data from.
     :return:
     """
-    return struct.unpack('>h',str(packet)[measurementRoundPos:measurementRoundPos + measurementRoundSize])[0]
+    if Dot1Q not in Ether(str(packet)):
+        return 0
+    return struct.unpack('>h',str(Ether(packet)[Raw])[:2])[0]
+    #return struct.unpack('>h',str(packet)[measurementRoundPos:measurementRoundPos + measurementRoundSize])[0]
 
 
 def getTimeStamp(packet):
@@ -120,7 +141,7 @@ def getTimeStamp(packet):
     :param packet: The packet to extract the data from.
     :return:
     """
-    return struct.unpack('>q',str(packet)[timeStampPos:timeStampPos + timeStampSize])[0]
+    return struct.unpack('>q',str(packet)[timeStampPos:])[0]
 
 
 
@@ -138,7 +159,7 @@ class Vlan(Packet):
     name = "Vlan"
 
     # Add the packet IDS with NULL ID and direction forward.
-    fields_desc=[ ShortField("ID2",NULL_ID),ShortField("QinQvalue",VLAN_ID_ETHERTYPE_QINQ),ShortField("ID1",NULL_ID),ShortField("packetStatus",dirForward) ]
+    fields_desc=[ ShortField("ID2",NULL_ID),ShortField("packetStatus",dirForward) ]
 
 
 def createMPsData(numberOfMPs, MPs):
@@ -158,8 +179,8 @@ def getMPsInfoFromPacket(pkt):
     :param pkt: The packet to extract the data from.
     :return: How many MPs to use and list of MPs to use
     """
-
-    MPsInfo = pkt[1].split(MPDataSeperatorData)[1]
+    MPsInfo = pkt[1].strip("\x00").split(MPDataSeperatorData)[1]
+    print MPsInfo + " " + str(len(MPsInfo))
     numberOfMPs = int(MPsInfo.split(numberOfMPsSeperator)[0])
     MPsString = MPsInfo.split(numberOfMPsSeperator)[1]
     MPs = []
@@ -170,6 +191,7 @@ def getMPsInfoFromPacket(pkt):
             MPs.append(int(strMP))
 
     return numberOfMPs, MPs
+	
 
 def createTopologyMessage(port, switchID):
     '''
@@ -181,13 +203,31 @@ def createTopologyMessage(port, switchID):
     data = topologyDataSeparator + switchID + topologySperator + port
     return str((Ether(type = topologyControllerType,src = topologyControllerEtherMAC)/Vlan()/Raw(load=data)))
 
+    
 def getToplogyData(pkt):
     '''
     Get the topology data from the packet (it will be the source port and source switch ID from where the packet was sent)
     :param pkt: the packet arrived
     :return: return the dest switch and port
     '''
-    topologyInfo = pkt[1].split(topologyDataSeparator)[1]
+    topologyInfo = pkt[1].split(topologyDataSeparator)[1].strip("\x00")
     switchID = int(topologyInfo.split(topologySperator)[0])
     port = int(topologyInfo.split(topologySperator)[1])
     return switchID, port
+    
+
+def getRTPInfoFromPacket(pkt):
+    '''
+    Get the full switches path of RTP
+    :param pkt: the packet arrived
+    :return: return the path switch and the RTP id
+    '''
+    packetParts = pkt[1].split(MPDataSeperatorData)[1].strip("\x00").split('|')
+    print packetParts
+    if packetParts[0] == "[]":
+        path = []
+    else:
+        path = [int(id) for id in packetParts[0].strip("[]").split(",")]
+    return path, int(packetParts[1])
+
+    

@@ -50,289 +50,53 @@ class GRAMIController(app_manager.RyuApp):
 
         # Holds the mapping between the switch ID and the datapath.
         self.id_to_datapath = {}
+        
+        self.rtp_id_to_path = {1: [1, 2, 3, 1]}#, 2: [1, 2, 4, 3, 1]}
 
+        #self.rtp_id_to_path = {}
+        self.rtp_switch_to_start_points = {}
+        self.rtp_switch_to_forward = {}
+        
+        self.rtp_id_to_path_with_ports = {}
+        
+        self.h1Toh2Path = { 1 : (1,2), 2 : (1,2), 3: (1,2), 4 : (1,2) }
+        
         # Saving the graph with the topology, will be updated on demand.
         self.topologyGraph = nx.Graph()
-
-        # Save how many flow entries to install on every switch (3 or 4).
-        self.numberOfFlowEntries = 4
-
-    def installTestStarFlowEntries(self):
-        """
-        Code written for specific test on start topology. (Measure duplication and tagging time).
-        :return:
-        """
-
-        datapath1 = self.id_to_datapath[1]
-        datapath2 = self.id_to_datapath[2]
-
-        # Install the flow entries on the MP.
-        Match = ofproto_v1_3_parser.OFPMatch(in_port = 1, eth_type = ExtraLayers.typeForTestingTaggingAndDuplicationTime)
-        Actions = [ofproto_v1_3_parser.OFPActionOutput(0xfffffffd), ofproto_v1_3_parser.OFPActionOutput(0xfffffffd),
-                   ofproto_v1_3_parser.OFPActionPopVlan(),
-                   ofproto_v1_3_parser.OFPActionSetField(eth_type = ExtraLayers.dirBackwardsThreeFlowEntries),
-                   ofproto_v1_3_parser.OFPActionPushVlan(ethertype = ExtraLayers.VLAN_ID_ETHERTYPE_QINQ),
-                   ofproto_v1_3_parser.OFPActionSetField(vlan_vid = 1),
-                   ofproto_v1_3_parser.OFPActionOutput(0xfffffffd)]
-        Inst = [ofproto_v1_3_parser.OFPInstructionActions(datapath1.ofproto.OFPIT_APPLY_ACTIONS,Actions)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath1, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=Match, instructions=Inst )
-        datapath1.send_msg(mod)
-
-
-    #Only for topology2 pure forwarding for 4 paths, install all the rules
-    def installPureForwardingTopo2(self):
-        """
-        Used to create specific path for pure forwarding to check the overhead of GRAMI.
-        Was written specifically for topology number 2.
-        :return:
-        """
-
-        # Datapaths
-        datapath1 = self.id_to_datapath[1]
-        datapath2 = self.id_to_datapath[2]
-        datapath3 = self.id_to_datapath[3]
-        datapath14 = self.id_to_datapath[14]
-        datapath16 = self.id_to_datapath[16]
-        datapath17 = self.id_to_datapath[17]
-        datapath20 = self.id_to_datapath[20]
-
-        ##################################################
-        #Path Len 1 (h1 (0) -> s2 (1))
-        MatchLen1s2toh1 = ofproto_v1_3_parser.OFPMatch(in_port = 1, eth_type = ExtraLayers.PureForwardingLen1EtherType)
-        ActionsLen1s2toh1 = [ofproto_v1_3_parser.OFPActionOutput(0xfffffff8)]
-        InstLen1s2toh1 = [ofproto_v1_3_parser.OFPInstructionActions(datapath2.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen1s2toh1)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath2, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen1s2toh1, instructions=InstLen1s2toh1 )
-        datapath2.send_msg(mod) #send the message
-
-        ##################################################
-        #the path is describes as node(port) -> node(inPort, outPort) -> node(inPort)
-        #Should install flow entries for both path forward and path return back to the host
-        #Path len 2 (h1 (0) -> s2 (1,4) -> s20(2))
-        MatchLen1s2tos20 = ofproto_v1_3_parser.OFPMatch(in_port = 1, eth_type = ExtraLayers.PureForwardingLen2EtherType)
-        ActionsLen1s2tos20 = [ofproto_v1_3_parser.OFPActionOutput(4)]
-        InstLen1s2tos20 = [ofproto_v1_3_parser.OFPInstructionActions(datapath2.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen1s2tos20)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath2, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen1s2tos20, instructions=InstLen1s2tos20 )
-        datapath2.send_msg(mod) #send the message
-
-
-        MatchLen1s20tos2 = ofproto_v1_3_parser.OFPMatch(in_port = 2, eth_type = ExtraLayers.PureForwardingLen2EtherType)
-        ActionsLen1s20tos2 = [ofproto_v1_3_parser.OFPActionOutput(0xfffffff8)]
-        InstLen1s20tos2 = [ofproto_v1_3_parser.OFPInstructionActions(datapath20.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen1s20tos2)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath20, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen1s20tos2, instructions=InstLen1s20tos2 )
-        datapath20.send_msg(mod) #send the message
-
-        MatchLen1s2toh1 = ofproto_v1_3_parser.OFPMatch(in_port = 4, eth_type = ExtraLayers.PureForwardingLen2EtherType)
-        ActionsLen1s2toh1 = [ofproto_v1_3_parser.OFPActionOutput(1)]
-        InstLen1s2toh1 = [ofproto_v1_3_parser.OFPInstructionActions(datapath2.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen1s2toh1)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath2, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen1s2toh1, instructions=InstLen1s2toh1 )
-        datapath2.send_msg(mod) #send the message
-
-        ##################################################
-        #Path len 3 (h1(0)-> s2(1,2) -> s1(1,2) -> s3(1))
-        MatchLen3s2tos1 = ofproto_v1_3_parser.OFPMatch(in_port = 1, eth_type = ExtraLayers.PureForwardingLen3EtherType)
-        ActionsLen3s2tos1 = [ofproto_v1_3_parser.OFPActionOutput(2)]
-        InstLen3s2tos1 = [ofproto_v1_3_parser.OFPInstructionActions(datapath2.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen3s2tos1)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath2, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen3s2tos1, instructions=InstLen3s2tos1 )
-        datapath2.send_msg(mod) #send the message
-
-
-        MatchLen3s1tos3 = ofproto_v1_3_parser.OFPMatch(in_port = 1, eth_type = ExtraLayers.PureForwardingLen3EtherType)
-        ActionsLen3s1tos3 = [ofproto_v1_3_parser.OFPActionOutput(2)]
-        InstLen3s1tos3 = [ofproto_v1_3_parser.OFPInstructionActions(datapath1.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen3s1tos3)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath1, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen3s1tos3, instructions=InstLen3s1tos3 )
-        datapath1.send_msg(mod) #send the message
-
-
-        MatchLen3s3tos1 = ofproto_v1_3_parser.OFPMatch(in_port = 1, eth_type = ExtraLayers.PureForwardingLen3EtherType)
-        ActionsLen3s3tos1 = [ofproto_v1_3_parser.OFPActionOutput(0xfffffff8)]
-        InstLen3s3tos1 = [ofproto_v1_3_parser.OFPInstructionActions(datapath3.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen3s3tos1)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath3, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen3s3tos1, instructions=InstLen3s3tos1 )
-        datapath3.send_msg(mod) #send the message
-
-        MatchLen3s1tos2 = ofproto_v1_3_parser.OFPMatch(in_port = 2, eth_type = ExtraLayers.PureForwardingLen3EtherType)
-        ActionsLen3s1tos2 = [ofproto_v1_3_parser.OFPActionOutput(1)]
-        InstLen3s1tos2 = [ofproto_v1_3_parser.OFPInstructionActions(datapath1.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen3s1tos2)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath1, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen3s1tos2, instructions=InstLen3s1tos2 )
-        datapath1.send_msg(mod) #send the message
-
-        MatchLen3s2toh1 = ofproto_v1_3_parser.OFPMatch(in_port = 2, eth_type = ExtraLayers.PureForwardingLen3EtherType)
-        ActionsLen3s2toh1 = [ofproto_v1_3_parser.OFPActionOutput(1)]
-        InstLen3s2toh1 = [ofproto_v1_3_parser.OFPInstructionActions(datapath2.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen3s2toh1)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath2, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen3s2toh1, instructions=InstLen3s2toh1 )
-        datapath2.send_msg(mod) #send the message
-
-        ##################################################
-        #Path len 4 (h1 (0) -> s2 (1,3) -> s17(2,4) -> s14(3,5) -> s16(1))
-        MatchLen4s2tos17 = ofproto_v1_3_parser.OFPMatch(in_port = 1, eth_type = ExtraLayers.PureForwardingLen4EtherType)
-        ActionsLen4s2tos17 = [ofproto_v1_3_parser.OFPActionOutput(3)]
-        InstLen4s2tos17 = [ofproto_v1_3_parser.OFPInstructionActions(datapath2.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen4s2tos17)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath2, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen4s2tos17, instructions=InstLen4s2tos17 )
-        datapath2.send_msg(mod) #send the message
-
-
-        MatchLen4s17tos14 = ofproto_v1_3_parser.OFPMatch(in_port = 2, eth_type = ExtraLayers.PureForwardingLen4EtherType)
-        ActionsLen4s17tos14 = [ofproto_v1_3_parser.OFPActionOutput(4)]
-        InstLen4s17tos14 = [ofproto_v1_3_parser.OFPInstructionActions(datapath17.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen4s17tos14)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath17, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen4s17tos14, instructions=InstLen4s17tos14 )
-        datapath17.send_msg(mod) #send the message
-
-
-        MatchLen4s14tos16 = ofproto_v1_3_parser.OFPMatch(in_port = 3, eth_type = ExtraLayers.PureForwardingLen4EtherType)
-        ActionsLen4s14tos16 = [ofproto_v1_3_parser.OFPActionOutput(5)]
-        InstLen4s14tos16 = [ofproto_v1_3_parser.OFPInstructionActions(datapath14.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen4s14tos16)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath14, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen4s14tos16, instructions=InstLen4s14tos16 )
-        datapath14.send_msg(mod) #send the message
-
-
-        MatchLen4s16tos14 = ofproto_v1_3_parser.OFPMatch(in_port = 1, eth_type = ExtraLayers.PureForwardingLen4EtherType)
-        ActionsLen4s16tos14 = [ofproto_v1_3_parser.OFPActionOutput(0xfffffff8)]
-        InstLen4s16tos14 = [ofproto_v1_3_parser.OFPInstructionActions(datapath16.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen4s16tos14)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath16, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen4s16tos14, instructions=InstLen4s16tos14 )
-        datapath16.send_msg(mod) #send the message
-
-        MatchLen4s14tos17 = ofproto_v1_3_parser.OFPMatch(in_port = 5, eth_type = ExtraLayers.PureForwardingLen4EtherType)
-        ActionsLen4s14tos17 = [ofproto_v1_3_parser.OFPActionOutput(3)]
-        InstLen4s14tos17 = [ofproto_v1_3_parser.OFPInstructionActions(datapath14.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen4s14tos17)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath14, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen4s14tos17, instructions=InstLen4s14tos17 )
-        datapath14.send_msg(mod) #send the message
-
-        MatchLen4s17tos2 = ofproto_v1_3_parser.OFPMatch(in_port = 4, eth_type = ExtraLayers.PureForwardingLen4EtherType)
-        ActionsLen4s17tos2 = [ofproto_v1_3_parser.OFPActionOutput(2)]
-        InstLen4s17tos2 = [ofproto_v1_3_parser.OFPInstructionActions(datapath17.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen4s17tos2)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath17, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen4s17tos2, instructions=InstLen4s17tos2 )
-        datapath17.send_msg(mod) #send the message
-
-        MatchLen4s2toh1 = ofproto_v1_3_parser.OFPMatch(in_port = 3, eth_type = ExtraLayers.PureForwardingLen4EtherType)
-        ActionsLen4s2toh1 = [ofproto_v1_3_parser.OFPActionOutput(1)]
-        InstLen4s2toh1 = [ofproto_v1_3_parser.OFPInstructionActions(datapath2.ofproto.OFPIT_APPLY_ACTIONS,ActionsLen4s2toh1)]
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath2, priority= NORMAL_SWITCH_FORWARDING_PRIO,
-                                             match=MatchLen4s2toh1, instructions=InstLen4s2toh1 )
-        datapath2.send_msg(mod) #send the message
-
-    def installDistributeFlowEntry(self, datapath):
-        '''
-        Install the distribution flow entry, Same fore the ccase of 3 or 4 flow entries.
-        :param datapath: datapath which represent the switch to install the flow entries on.
-        '''
-
-        # Get the switch ID.
-        switchID = datapath.id
-
-        # Get the parent port for the match.
-        parentPort = (self.actionsGenerator.switch_to_parent_port[switchID])
-
-        # Match if the probe packet is directed forward (equivalent to forward and setIDFlag TRUE) and the ingress port is
-        # the parent port. For safety , added also NULL ID in vlan.
-        ForwardingMatch = ofproto_v1_3_parser.OFPMatch(in_port = parentPort, eth_type = ExtraLayers.dirForward, vlan_vid =  ExtraLayers.NULL_ID)
-
-        # Get the distribution actions.
-        distributionActions = self.actionsGenerator.getDistributionActions(switchID, self.numberOfFlowEntries)
+        
+    def installSimpleForwardRules(self, datapath):
+        if datapath.id not in self.h1Toh2Path:
+            return
+        toH2Port = self.h1Toh2Path[datapath.id][1]
+        toH1Port = self.h1Toh2Path[datapath.id][0]
+        print "Installing rules to {0}".format(datapath.id)
+        
+        h1MacAddress = "00:0c:29:8a:c8:66"
+        h2MacAddress = "00:0c:29:8a:c8:ff"
+        
+        match = ofproto_v1_3_parser.OFPMatch(eth_src = h1MacAddress )
 
         # The instructions are apply actions with the distribution Actions - apply actions by order.
-        forwardingInst = [ofproto_v1_3_parser.OFPInstructionActions(datapath.ofproto.OFPIT_APPLY_ACTIONS, distributionActions)]
+        instructions = [ofproto_v1_3_parser.OFPInstructionActions(datapath.ofproto.OFPIT_APPLY_ACTIONS, 
+                                                                    [ofproto_v1_3_parser.OFPActionOutput(toH2Port)])]
 
         # Prepare the flow entry (NOTE: higher priority).
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath, priority=DISTRIBUTE_PRIO,
-                                             match=ForwardingMatch, instructions=forwardingInst)
+        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath, priority=3,
+                                             match=match, instructions=instructions)
         datapath.send_msg(mod)
 
-    def installDoNotDistributeFlowEntry(self,datapath):
-        '''
-        Install the do not distribute flow entry. for matching the flow entries are the same for the case of 3 or 4 flow entries.
-        :param datapath: datapath which represent the switch to install the flow entries on.
-        '''
+        match = ofproto_v1_3_parser.OFPMatch(eth_src = h2MacAddress)
 
-        #Get the switch ID
-        switchID = datapath.id
 
-        # Match if the probe packet is directed forward (equivalent to forward and setIDFlag TRUE).
-        doNotDistributeMatch = ofproto_v1_3_parser.OFPMatch(eth_type = ExtraLayers.dirForward)
+        # The instructions are apply actions with the distribution Actions - apply actions by order.
+        instructions = [ofproto_v1_3_parser.OFPInstructionActions(datapath.ofproto.OFPIT_APPLY_ACTIONS, 
+                                                                    [ofproto_v1_3_parser.OFPActionOutput(toH1Port)])]
 
-        # Get the do not distribute actions.
-        doNotDistributeActions = self.actionsGenerator.getDoNotDistributeActions(switchID,self.numberOfFlowEntries)
-
-        # The instructions are apply actions with the return and tag Actions - apply actions by order.
-        doNotDistributeInst = [ofproto_v1_3_parser.OFPInstructionActions(datapath.ofproto.OFPIT_APPLY_ACTIONS,doNotDistributeActions)]
-
-        # Prepare the flow entry.
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath, priority=NORMAL_PRIO,
-                                             match=doNotDistributeMatch, instructions=doNotDistributeInst)
+        # Prepare the flow entry (NOTE: higher priority).
+        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath, priority=3,
+                                             match=match, instructions=instructions)
         datapath.send_msg(mod)
-
-    def installReturnAndTagFlowEntry(self, datapath):
-        '''
-        Install return and tag flow entry. This flow entry is different for the 3 or 4 flow entries case, and the matching is different
-        :param datapath: datapath which represent the switch to install the flow entries on.
-        '''
-
-        # Get the ethertype to match on for the case of 3 flow entries or 4 flow entries
-        if (3 == self.numberOfFlowEntries):
-            ethTypeMatch = ExtraLayers.dirBackwardsThreeFlowEntries
-        else:
-            # Equivalent to return with setIDFlag TRUE.
-            ethTypeMatch = ExtraLayers.dirReturnAndTag
-
-        # Get the switch ID.
-        switchID = datapath.id
-
-        # Match if this is a return and tag probe pacekt (4 flow entries case) or dir backwards if 3 flow entries.
-        FirstReturnMatch = ofproto_v1_3_parser.OFPMatch(eth_type = ethTypeMatch)
-
-        # Get actions.
-        returnAndTagActions = self.actionsGenerator.getReturnAndTagActions(switchID,self.numberOfFlowEntries)
-
-        # The instructions are apply actions with the return and tag Actions - apply actions by order.
-        returnAndTagActions = [ofproto_v1_3_parser.OFPInstructionActions(datapath.ofproto.OFPIT_APPLY_ACTIONS,returnAndTagActions)]
-
-        # Prepare the flow entry.#prepare the message for flow installing on given switch, priority, match and instructions
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath, priority=NORMAL_PRIO,
-                                             match=FirstReturnMatch, instructions=returnAndTagActions)
-        datapath.send_msg(mod)
-
-    def installReturnNoTagFlowEntry(self, datapath):
-        '''
-        Install the return no tag flow entry - relevant for the case of 4 flow entries only.
-        :param datapath: datapath which represent the switch to install the flow entries on.
-        '''
-
-        #If we are working with 3 flow entries only, return because need to install nothing.
-        if (3 == self.numberOfFlowEntries):
-            return
-
-        # Get the switch ID
-        switchID = datapath.id
-
-        # Match if the packet has return no tag Ethertype. Equivalent to return with setIDFlag TRUE.
-        returnNoTagMatch = ofproto_v1_3_parser.OFPMatch(eth_type = ExtraLayers.dirReturnNoTag)
-
-        # Get actions.
-        returnNoTagActions = self.actionsGenerator.getReturnNoTagActions(switchID)
-
-        # The instructions are apply actions with the return no tag Actions - apply actions by order.
-        SecondReturnInst = [ofproto_v1_3_parser.OFPInstructionActions(datapath.ofproto.OFPIT_APPLY_ACTIONS,returnNoTagActions)]
-
-        # Prepare the flow entry.
-        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath, priority=NORMAL_PRIO,
-                                             match=returnNoTagMatch, instructions=SecondReturnInst)
-        datapath.send_msg(mod)
-
-
+        
 
     #install all of GRAMI's flow entries
     def installGRAMIFlowEntriesOnSwitch(self, datapath):
@@ -347,6 +111,10 @@ class GRAMIController(app_manager.RyuApp):
         self.installReturnAndTagFlowEntry(datapath)
         self.installReturnNoTagFlowEntry(datapath)
         self.installDoNotDistributeFlowEntry(datapath)
+        
+        self.installRTPForwardFlowEntries(datapath)
+        self.installRTPReturnFlowEntries(datapath)
+        
         print "End time" , time.time()
 
     def sendTopologyMessage(self, port, switchID):
@@ -410,7 +178,8 @@ class GRAMIController(app_manager.RyuApp):
 
         print "**********List of switches"
         print self.topologyGraph.nodes()
-
+        
+        
     def analyzeAndInstallFlowEntries(self, numberOfMPs, MPs):
         """
         Analyze the network, calculate the overlay network and install the flow entries on network switches.
@@ -418,13 +187,14 @@ class GRAMIController(app_manager.RyuApp):
         :param MPs: The location for the MPs.
         :return:
         """
+        
 
-        print "**********List of links with ports"
+        print MPs, type(MPs), numberOfMPs, type(numberOfMPs)
         for link in self.topologyGraph.edges(data= True):
             print link
-
+        
         '''
-        #print MPs, type(MPs), numberOfMPs, type(numberOfMPs)
+        #
         #print myNet.edges()
         '''
 
@@ -432,20 +202,88 @@ class GRAMIController(app_manager.RyuApp):
         OGMyNet = OverlayNetwork.OverlayNetworkGraph(self.topologyGraph, numberOfMPs, MPs)
 
         # Create the action generator for generation of action lists for every switch (get the parent and distribution ports).
-        self.actionsGenerator = ActionsGenerator.ActionsGenerator(self.topologyGraph, OGMyNet)
-
+        self.actionsGenerator = ActionsGenerator.ActionsGenerator(self.topologyGraph, OGMyNet, self.rtp_switch_to_start_points)
+        self.getRTPsPathWithPorts()
+           
+        
         print "*** the MPs are"
         print OGMyNet.MPs
         print "*** father port for switch ID"
         print self.actionsGenerator.switch_to_parent_port
         print "*** distribution ports for switch ID"
         print self.actionsGenerator.switch_to_distribution_port
-
+        print "*** RTPS"
+        print self.rtp_id_to_path
+        print self.rtp_id_to_path_with_ports
+        print self.rtp_switch_to_start_points
+        print self.rtp_switch_to_forward
+        
         # Install all the flow entries for every switch in the network.
         for switch in OGMyNet.graph.nodes():
             self.installGRAMIFlowEntriesOnSwitch(self.id_to_datapath[switch])
 
-
+    
+    def appendRTPEntry(self, path, RTPID):
+        """
+        add a RTP caclulation.
+        :param path: an array of the RTP switches ID path.
+        :param RTPID: the id of rtp.
+        :return:
+        """
+        
+        print "*** Adding RTP <{0}> with path {1}".format(RTPID, path)
+        
+        if len(path) <= 2:
+            print "*** Error: invalid path length"
+            return
+        if path[0] != path[-1]:
+            print "*** Error: path is not a circle"
+            return
+        
+        self.rtp_id_to_path[RTPID] = path
+    
+    def getRTPsPathWithPorts(self):
+        """
+        get full RTP path with in and out ports.
+        :return:
+        """
+        # Iterate over all the RTPs
+        for id, path in self.rtp_id_to_path.iteritems():
+            linksWithPorts = []
+            # For each link in RTP
+            for idIndex in range(0, len(path)-1):
+                found = False
+                currentId = path[idIndex]
+                nextId = path[idIndex+1]
+                # add the link src and dst port to the switch
+                for link in self.topologyGraph.edges(data= True):
+                    if ((link[2]['dst'] == currentId) and (link[2]['src'] == nextId)):
+                        linksWithPorts.append({'src' : currentId,
+                                               'dst' : nextId, 
+                                               'srcPort' : link[2]['dstPort'], 
+                                               'dstPort' : link[2]['srcPort']})
+                        found = True
+                        break
+                    elif ((link[2]['src'] == currentId) and (link[2]['dst'] == nextId)):
+                        linksWithPorts.append(link[2])
+                        found = True
+                        break
+                if not found:
+                    print "bad {0} {1}".format(currentId, nextId)
+            # add the full path with the ID 
+            self.rtp_id_to_path_with_ports[id] = linksWithPorts
+        
+        # create start rtp switches dictionaries
+        for id, RTP in self.rtp_id_to_path_with_ports.iteritems():
+            if RTP[0]['src'] not in self.rtp_switch_to_start_points:
+                self.rtp_switch_to_start_points[RTP[0]['src']] = []
+            self.rtp_switch_to_start_points[RTP[0]['src']].append( { 'id': id, 'outPort': RTP[0]['srcPort'], 'inPort': RTP[-1]['dstPort'] } )
+            for i in range(1,len(RTP)):
+                if RTP[i]['src'] not in self.rtp_switch_to_forward:
+                    self.rtp_switch_to_forward[RTP[i]['src']] = []
+                self.rtp_switch_to_forward[RTP[i]['src']].append( { 'id': id, 'outPort': RTP[i]['srcPort'], 'inPort': RTP[i-1]['dstPort'] } )
+         
+      
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         """
@@ -472,6 +310,7 @@ class GRAMIController(app_manager.RyuApp):
 
         # Add datapath to switch mapping
         self.id_to_datapath[datapath.id] = datapath
+        self.installSimpleForwardRules(datapath)
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None):
         """
@@ -497,6 +336,173 @@ class GRAMIController(app_manager.RyuApp):
             mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
                                     match=match, instructions=inst)
         datapath.send_msg(mod)
+
+
+    def installDistributeFlowEntry(self, datapath):
+        '''
+        Install the distribution flow entry, Same fore the ccase of 3 or 4 flow entries.
+        :param datapath: datapath which represent the switch to install the flow entries on.
+        '''
+
+        # Get the switch ID.
+        switchID = datapath.id
+
+        # Get the parent port for the match.
+        parentPort = (self.actionsGenerator.switch_to_parent_port[switchID])
+
+        # Match if the probe packet is directed forward (equivalent to forward and setIDFlag TRUE) and the ingress port is
+        # the parent port. For safety , added also NULL ID in vlan.
+        ForwardingMatch = ofproto_v1_3_parser.OFPMatch(in_port = parentPort, eth_src = ExtraLayers.DistributeMAC,
+                                                       vlan_vid=(0x1000, 0x1000))
+
+        # Get the distribution actions.
+        distributionActions = self.actionsGenerator.getDistributionActions(switchID)
+
+        # The instructions are apply actions with the distribution Actions - apply actions by order.
+        forwardingInst = [ofproto_v1_3_parser.OFPInstructionActions(datapath.ofproto.OFPIT_APPLY_ACTIONS, distributionActions)]
+
+        # Prepare the flow entry (NOTE: higher priority).
+        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath, priority=DISTRIBUTE_PRIO,
+                                             match=ForwardingMatch, instructions=forwardingInst)
+        datapath.send_msg(mod)
+
+
+    def installDoNotDistributeFlowEntry(self,datapath):
+        '''
+        Install the do not distribute flow entry. for matching the flow entries are the same for the case of 3 or 4 flow entries.
+        :param datapath: datapath which represent the switch to install the flow entries on.
+        '''
+
+        #Get the switch ID
+        switchID = datapath.id
+
+        # Match if the probe packet is directed forward (equivalent to forward and setIDFlag TRUE).
+        doNotDistributeMatch = ofproto_v1_3_parser.OFPMatch(eth_src = ExtraLayers.DistributeMAC,
+                                                       vlan_vid=(0x1000, 0x1000))
+
+        # Get the do not distribute actions.
+        doNotDistributeActions = self.actionsGenerator.getDoNotDistributeActions(switchID)
+
+        # The instructions are apply actions with the return and tag Actions - apply actions by order.
+        doNotDistributeInst = [ofproto_v1_3_parser.OFPInstructionActions(datapath.ofproto.OFPIT_APPLY_ACTIONS,doNotDistributeActions)]
+
+        # Prepare the flow entry.
+        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath, priority=NORMAL_PRIO,
+                                             match=doNotDistributeMatch, instructions=doNotDistributeInst)
+        datapath.send_msg(mod)
+
+    def installReturnAndTagFlowEntry(self, datapath):
+        '''
+        Install return and tag flow entry. This flow entry is different for the 3 or 4 flow entries case, and the matching is different
+        :param datapath: datapath which represent the switch to install the flow entries on.
+        '''
+   
+        # Equivalent to return with setIDFlag TRUE.
+        ethTypeMatch = ExtraLayers.dirReturnAndTag
+
+        # Get the switch ID.
+        switchID = datapath.id
+
+        # Match if this is a return and tag probe pacekt (4 flow entries case) or dir backwards if 3 flow entries.
+        FirstReturnMatch = ofproto_v1_3_parser.OFPMatch(eth_src = ExtraLayers.ReturnAndTagMAC,
+                                                       vlan_vid=(0x1000, 0x1000))
+
+        # Get actions.
+        returnAndTagActions = self.actionsGenerator.getReturnAndTagActions(switchID)
+
+        # The instructions are apply actions with the return and tag Actions - apply actions by order.
+        returnAndTagActions = [ofproto_v1_3_parser.OFPInstructionActions(datapath.ofproto.OFPIT_APPLY_ACTIONS,returnAndTagActions)]
+
+        # Prepare the flow entry.#prepare the message for flow installing on given switch, priority, match and instructions
+        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath, priority=NORMAL_PRIO,
+                                             match=FirstReturnMatch, instructions=returnAndTagActions)
+        datapath.send_msg(mod)
+
+    def installReturnNoTagFlowEntry(self, datapath):
+        '''
+        Install the return no tag flow entry - relevant for the case of 4 flow entries only.
+        :param datapath: datapath which represent the switch to install the flow entries on.
+        '''
+
+        # Get the switch ID
+        switchID = datapath.id
+
+        # Match if the packet has return no tag Ethertype. Equivalent to return with setIDFlag TRUE.
+        returnNoTagMatch = ofproto_v1_3_parser.OFPMatch(eth_src = ExtraLayers.ReturnNoTagMAC,
+                                                       vlan_vid=(0x1000, 0x1000))
+
+        # Get actions.
+        returnNoTagActions = self.actionsGenerator.getReturnNoTagActions(switchID)
+
+        # The instructions are apply actions with the return no tag Actions - apply actions by order.
+        SecondReturnInst = [ofproto_v1_3_parser.OFPInstructionActions(datapath.ofproto.OFPIT_APPLY_ACTIONS,returnNoTagActions)]
+
+        # Prepare the flow entry.
+        mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath, priority=NORMAL_PRIO,
+                                             match=returnNoTagMatch, instructions=SecondReturnInst)
+        datapath.send_msg(mod)
+
+
+    def installRTPForwardFlowEntries(self, datapath):
+        """
+        install the RTP foward packet entries.
+        :param datapath: switch datapath.
+        :return:
+        """
+        
+        # Get the switch ID
+        switchID = datapath.id
+        
+        if switchID not in self.rtp_switch_to_forward:
+            return
+        
+        for entry in self.rtp_switch_to_forward[switchID]:
+            # Match if the packet has return no tag Ethertype. Equivalent to return with setIDFlag TRUE.
+            RTPForwardMatch = ofproto_v1_3_parser.OFPMatch(eth_src = ExtraLayers.RTPMAC,
+                                                       vlan_vid=ActionsGenerator.retMaskedVlanID(entry['id']))
+
+            # Get actions.
+            RTPForwardActions = self.actionsGenerator.getRTPForwardAction(entry['outPort'])
+
+            # The instructions are apply actions with the return no tag Actions - apply actions by order.
+            SecondReturnInst = [ofproto_v1_3_parser.OFPInstructionActions(datapath.ofproto.OFPIT_APPLY_ACTIONS,RTPForwardActions)]
+
+            # Prepare the flow entry.
+            mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath, priority=NORMAL_PRIO,
+                                                 match=RTPForwardMatch, instructions=SecondReturnInst)
+            datapath.send_msg(mod)
+        
+    def installRTPReturnFlowEntries(self, datapath):
+        """
+        Install RTP entry when the RTP path end, and we need ti return the packet to MP
+        :param datapath: switch datapath.
+        :return:
+        """
+        # Get the switch ID
+        switchID = datapath.id
+        
+        if switchID not in self.rtp_switch_to_start_points:
+            return
+        
+        for entry in self.rtp_switch_to_start_points[switchID]:
+            print "match id {0} on switch {1}".format(entry['id'],switchID)
+            # Match if the packet has return no tag Ethertype. Equivalent to return with setIDFlag TRUE.
+            RTPReturnMatch = ofproto_v1_3_parser.OFPMatch(eth_src = ExtraLayers.RTPMAC,
+                                                       vlan_vid=ActionsGenerator.retMaskedVlanID(entry['id']))
+
+            
+            
+            # Get actions.
+            RTPReturnActions = self.actionsGenerator.getRTPReturnActions(switchID,entry['inPort'])
+
+            # The instructions are apply actions with the return no tag Actions - apply actions by order.
+            SecondReturnInst = [ofproto_v1_3_parser.OFPInstructionActions(datapath.ofproto.OFPIT_APPLY_ACTIONS,RTPReturnActions)]
+
+            # Prepare the flow entry.
+            mod = ofproto_v1_3_parser.OFPFlowMod(datapath=datapath, priority=NORMAL_PRIO,
+                                                 match=RTPReturnMatch, instructions=SecondReturnInst)
+            datapath.send_msg(mod)
+
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
@@ -530,7 +536,7 @@ class GRAMIController(app_manager.RyuApp):
 
         # If this is a update topology message, get also the number of flow entries and update the topology.
         if (ExtraLayers.topologyHostEtherMAC == src):
-            self.numberOfFlowEntries = ExtraLayers.getMeasurementRound(msg.data)
+            ExtraLayers.getMeasurementRound(msg.data)
             self.updateTopology()
             return
 
@@ -539,52 +545,11 @@ class GRAMIController(app_manager.RyuApp):
             numberOfMPs, MPs = ExtraLayers.getMPsInfoFromPacket(pkt)
             self.analyzeAndInstallFlowEntries(numberOfMPs, MPs)
             return
-
-        '''# If this is an install pure forwarding flow entries for topology 2
-        if (ExtraLayers.pureForwardingMac == src):
-            self.installPureForwardingTopo2()
+        
+        # If this is an append RTP message, get the ID and the path of RTP.        
+        if (ExtraLayers.appendRTPMAC == src):
+            path, RTPID = ExtraLayers.getRTPInfoFromPacket(pkt)
+            self.appendRTPEntry(path, RTPID)
             return
 
-        # If this is for star topology tests.
-        if (ExtraLayers.testStarMAC == src):
-            self.installTestStarFlowEntries()
-            return
-
-
-        print "didnt got here" '''
-
-        # The messages above were created to be analyzed in the controller and shouldn't be forwarded.
-
-        dpid = datapath.id
-        self.mac_to_port.setdefault(dpid, {})
-
-        #self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
-
-        # Learn a mac address to avoid FLOOD next time.
-        self.mac_to_port[dpid][src] = in_port
-
-        if dst in self.mac_to_port[dpid]:
-            out_port = self.mac_to_port[dpid][dst]
-        else:
-            out_port = ofproto.OFPP_FLOOD
-
-        actions = [parser.OFPActionOutput(out_port)]
-
-        # Install a flow to avoid packet_in next time
-        if out_port != ofproto.OFPP_FLOOD:
-            match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
-            # verify if we have a valid buffer_id, if yes avoid to send both
-            # flow_mod & packet_out
-            if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                self.add_flow(datapath, NORMAL_SWITCH_FORWARDING_PRIO, match, actions, msg.buffer_id)
-                return
-            else:
-                self.add_flow(datapath, NORMAL_SWITCH_FORWARDING_PRIO, match, actions)
-        data = None
-        if msg.buffer_id == ofproto.OFP_NO_BUFFER:
-            data = msg.data
-
-        out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                  in_port=in_port, actions=actions, data=data)
-
-        datapath.send_msg(out)
+        return

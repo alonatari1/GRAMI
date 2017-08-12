@@ -24,7 +24,7 @@ class ActionsGenerator(object):
     """
 
 
-    def __init__ (self, portInfoGraph, OverlayGraph):
+    def __init__ (self, portInfoGraph, OverlayGraph, rtp_switch_to_start_points):
         """
         Initialize the action generator with information from 2 graphs. The first with ports information and the
         second with te overlay netork information.
@@ -38,15 +38,18 @@ class ActionsGenerator(object):
 
         # Dictionary that maps between a witch and its parent port (The single ingess solid link is connected to that port).
         self.switch_to_parent_port = {}
-
+        
+        self.rtp_switch_to_start_points = rtp_switch_to_start_points
+                
         # Graph with info about the ports, (the original graph that for every edge, we have also the source and dest port).
         self.portInfoGraph = portInfoGraph
 
         # The overlay graph contains the distribution switches and parent switches for every switch.
         self.OG = OverlayGraph
-
+        
         #Save the distribution ports and parent port for every switch.
         self.initPorts()
+        
 
     def initPorts(self):
         """ Given the overlay graph, that sets the distribution switches and parent switches of every switch in the network
@@ -90,173 +93,131 @@ class ActionsGenerator(object):
                     
                 # If the node is the parent switch it means that it is MP and it is connected via port 1 (The MP is not a switch).
                 if (node == parentSwitch):
-                    self.switch_to_parent_port[node] = 1
-
-    def getDistributionActions(self,switchID, numberOfFlowEntries):
+                    self.switch_to_parent_port[node] = 4
+             
+             
+    def getRTPForwardAction(self, outPort):
+        '''
+        Get the RTP foward rule
+        :param outPort: out port of current switch.
+        :return: RTP Forward flow entry to be installed
+        '''
+        return [ofproto_v1_3_parser.OFPActionOutput(outPort)]
+    
+    def getRTPReturnActions(self, switchID, inPort):
+        '''
+        Get the return rtp packet to the given switch.
+        :param switchID: ID of current switch.
+        :param switchID: in port of switch.
+        :return: distribution flow entries to be installed
+        '''
+        # set as reutrn packet
+        actions = []
+        actions.append(ofproto_v1_3_parser.OFPActionSetField(eth_src = ExtraLayers.ReturnNoTagMAC))
+        
+        #return the packet in the in port
+        returnOutPort = self.switch_to_parent_port[switchID]
+        if returnOutPort == inPort:
+            returnOutPort = OF_IN_PORT
+                
+        
+        actions.append(ofproto_v1_3_parser.OFPActionOutput(returnOutPort))
+        return actions
+    
+    def getDistributionActions(self,switchID):
         '''
         Get the distribution actions to the given switch and current number of flow entries.
         :param switchID: ID of current switch.
-        :param numberOfFlowEntries: 3 or 4 flow entries mode.
         :return: distribution flow entries to be installed
         '''
         #initialize the actions set to be empty
         actions = []
 
-        #For case of 3 flow entries
-        if (3 == numberOfFlowEntries):
-            # Distribution in 3 flow entries case - first return the packet and then add info to each packet and distribute.
+        #Distribution in 4 flow entries  - because returning the packet required extra processing and distribution requires none, first distribute the original packet and then return
+        #First- send the original packet to all the distribution switches
+        #Then - add info about the current switch ID (inner tag) and change the direction to be return and tag direction
+        #packet arrive with inner vlan id of prev switch and dummy switch- change return direction ,set
+        #the outer vlan to be curr switch and return via same port
 
-            # Packet arrive with inner vlan id of prev switch and dummy switch- change to return direction, set
-            # The outer vlan to be curr switch and return via same port,
+         #if there are port to distribute to, should  add the distribution actions (send the packet to distribution as is)
+        if (0 != len(self.switch_to_distribution_port[switchID])):
 
-            # Pop vlan
-            actions.append(ofproto_v1_3_parser.OFPActionPopVlan())
-            #set the DirectionReturn field to be dir backwards (constant for return direction of 3 flow entries)
-            actions.append(ofproto_v1_3_parser.OFPActionSetField(eth_type = ExtraLayers.dirBackwardsThreeFlowEntries))
-            # push a new VLAN with ethertype of vlan
-            actions.append(ofproto_v1_3_parser.OFPActionPushVlan(ethertype = ExtraLayers.VLAN_ID_ETHERTYPE_QINQ))
-            # set vlan ID to be current switch (last switch field) with solid link masking
-            actions.append(ofproto_v1_3_parser.OFPActionSetField(vlan_vid = (retMaskedVlanID(switchID)|ExtraLayers.solidFlag)))
-            #return via same port
-            actions.append( ofproto_v1_3_parser.OFPActionOutput(OF_IN_PORT))
+            #send to every switch in distribution port all the distribution ports
+            for dist_port in self.switch_to_distribution_port[switchID]:
+                actions.append(ofproto_v1_3_parser.OFPActionOutput(dist_port))
 
-            #if there are port to distribute to, should add the distribution actions
-            #For the distribution , for every packet, need to add vlan actions
-            if (0 != len(self.switch_to_distribution_port[switchID])):
-
-                #now after packet returned create the distribution packet. remove both vlans , push current switch
-                # id and then dummy switch ID and spread to all req switches
-
-                # Pop vlan
+        #Now add the info about the current switch by popping both vlan and adding current switch tag.
+        actions.append(ofproto_v1_3_parser.OFPActionSetField(eth_src = ExtraLayers.ReturnAndTagMAC))
+        # set vlan ID to be current switch with solid flag.
+        actions.append(ofproto_v1_3_parser.OFPActionSetField(vlan_vid = (retMaskedVlanID(switchID)|ExtraLayers.solidFlag)))
+        # Send to ingress port.
+        actions.append(ofproto_v1_3_parser.OFPActionOutput(OF_IN_PORT))        
+        
+        # if the there is no any RTP start in the current switch, exit
+        if switchID not in self.rtp_switch_to_start_points:
+            return actions
+        
+        # add the RTP for each RTP ID
+        actions.append(ofproto_v1_3_parser.OFPActionSetField(vlan_vid = retMaskedVlanID(ExtraLayers.NULL_ID)))
+        
+        entryNum = 0
+        for entry in self.rtp_switch_to_start_points[switchID]:
+            actions.append(ofproto_v1_3_parser.OFPActionPushVlan())
+            actions.append(ofproto_v1_3_parser.OFPActionSetField(eth_src = ExtraLayers.RTPMAC))
+            actions.append(ofproto_v1_3_parser.OFPActionSetField(vlan_vid=retMaskedVlanID(entry['id'])))
+            actions.append(ofproto_v1_3_parser.OFPActionOutput(entry['outPort']))
+            #Do no pop the vlan header from the last packet send
+            entryNum = entryNum + 1
+            if entryNum < len(self.rtp_switch_to_start_points[switchID]):
                 actions.append(ofproto_v1_3_parser.OFPActionPopVlan())
-                #change the vlan ID from dirbackward to be vlan eth type so we will be able to pop vlan again
-                actions.append(ofproto_v1_3_parser.OFPActionSetField(eth_type = ExtraLayers.VLAN_ID_ETHERTYPE_QINQ))
-                #pop second vlan
-                actions.append(ofproto_v1_3_parser.OFPActionPopVlan())
-                #push vlan with vlan id of current switch
-                actions.append(ofproto_v1_3_parser.OFPActionPushVlan(ethertype = ExtraLayers.VLAN_ID_ETHERTYPE_QINQ))
-                actions.append(ofproto_v1_3_parser.OFPActionSetField(vlan_vid = retMaskedVlanID(switchID)))
-                #push vlan with dummy vlan because it will be removed on return path
-                actions.append(ofproto_v1_3_parser.OFPActionPushVlan(ethertype = ExtraLayers.VLAN_ID_ETHERTYPE_QINQ))
-                actions.append(ofproto_v1_3_parser.OFPActionSetField(vlan_vid = retMaskedVlanID(ExtraLayers.NULL_ID)))
-                #send to every switch in distribution port all the distribution ports
-                #dist_ports = (self.switch_to_distribution_port)[switchID]
-                for dist_port in self.switch_to_distribution_port[switchID]:
-                    actions.append(ofproto_v1_3_parser.OFPActionOutput(dist_port))
-
-        #4 flow entries case
-        else:
-            #Distribution in 4 flow entries  - because returning the packet required extra processing and distribution requires none, first distribute the original packet and then return
-            #First- send the original packet to all the distribution switches
-            #Then - add info about the current switch ID (inner tag) and change the direction to be return and tag direction
-            #packet arrive with inner vlan id of prev switch and dummy switch- change return direction ,set
-            #the outer vlan to be curr switch and return via same port
-
-             #if there are port to distribute to, should  add the distribution actions (send the packet to distribution as is)
-            if (0 != len(self.switch_to_distribution_port[switchID])):
-
-                #send to every switch in distribution port all the distribution ports
-                for dist_port in self.switch_to_distribution_port[switchID]:
-                    actions.append(ofproto_v1_3_parser.OFPActionOutput(dist_port))
-
-            #Now add the info about the current switch by popping both vlan and adding current switch tag.
-            # Pop vlan
-            actions.append(ofproto_v1_3_parser.OFPActionPopVlan())
-            # Pop vlan
-            actions.append(ofproto_v1_3_parser.OFPActionPopVlan())
-            #set the DirectionReturn field to be dir return and tag.
-            actions.append(ofproto_v1_3_parser.OFPActionSetField(eth_type = ExtraLayers.dirReturnAndTag))
-            #Set QinQ vlan type.
-            actions.append(ofproto_v1_3_parser.OFPActionPushVlan(ethertype = ExtraLayers.VLAN_ID_ETHERTYPE_QINQ))
-            # set vlan ID to be current switch with solid flag.
-            actions.append(ofproto_v1_3_parser.OFPActionSetField(vlan_vid = (retMaskedVlanID(switchID)|ExtraLayers.solidFlag)))
-            #push vlan with dummy vlan becuase it will be removed on return (with ethertype that suit)
-            actions.append(ofproto_v1_3_parser.OFPActionPushVlan(ethertype = ExtraLayers.VLAN_ETHERTYPE ))
-            actions.append(ofproto_v1_3_parser.OFPActionSetField(vlan_vid = retMaskedVlanID(ExtraLayers.NULL_ID)))
-            # Send to ingress port.
-            actions.append( ofproto_v1_3_parser.OFPActionOutput(OF_IN_PORT))
-
+            
         #return the actions list
         return actions
-
-
-    def getDoNotDistributeActions(self,switchID, numberOfFlowEntries):
+        
+        
+    def getDoNotDistributeActions(self,switchID):
         '''
         Get the do not distribute actions to the given switch and current number of flow entries.
         :param switchID: ID of current switch.
-        :param numberOfFlowEntries: 3 or 4 flow entries mode.
         :return: Do not distribute flow entries to be installed.
         '''
         
         #initialize the actions set to be empty.
         actions = []
-        
-        #3 flow entries case.
-        if (3 == numberOfFlowEntries):
-            #create the return packet - set the backwards direction and add the switch id as outer tagging (without solid masking)
-            #return via the input port
+    
+        # Create the return packet - Set return And tag direaction and set the current switch ID with solid flag FALSE.
 
-            # Pop vlan
-            actions.append(ofproto_v1_3_parser.OFPActionPopVlan())
-            #set the DirectionReturn field to be dir backwards
-            actions.append(ofproto_v1_3_parser.OFPActionSetField(eth_type = ExtraLayers.dirBackwardsThreeFlowEntries))
-            # push a new VLAN with ethertype of vlan
-            actions.append(ofproto_v1_3_parser.OFPActionPushVlan(ethertype = ExtraLayers.VLAN_ID_ETHERTYPE_QINQ))
-            # set vlan ID to be current switch (last switch field)
-            actions.append(ofproto_v1_3_parser.OFPActionSetField(vlan_vid = retMaskedVlanID(switchID)))
-            #return via same port
-            actions.append( ofproto_v1_3_parser.OFPActionOutput(OF_IN_PORT))
-
-        else:
-            # Create the return packet - Set return And tag direaction and set the current switch ID with solid flag FALSE.
-
-            # Pop vlan
-            actions.append(ofproto_v1_3_parser.OFPActionPopVlan())
-            # Pop vlan
-            actions.append(ofproto_v1_3_parser.OFPActionPopVlan())
-            #set the DirectionReturn field to be  ddirReturnAndTag
-            actions.append(ofproto_v1_3_parser.OFPActionSetField(eth_type = ExtraLayers.dirReturnAndTag))
-            #Push the current switch id as inner tagging
-            actions.append(ofproto_v1_3_parser.OFPActionPushVlan(ethertype = ExtraLayers.VLAN_ID_ETHERTYPE_QINQ))
-            # set vlan ID to be current switch(No solid flag).
-            actions.append(ofproto_v1_3_parser.OFPActionSetField(vlan_vid = (retMaskedVlanID(switchID))))
-            #push vlan with dummy vlan becuase it will be removed on return.
-            actions.append(ofproto_v1_3_parser.OFPActionPushVlan(ethertype = ExtraLayers.VLAN_ETHERTYPE ))
-            actions.append(ofproto_v1_3_parser.OFPActionSetField(vlan_vid = retMaskedVlanID(ExtraLayers.NULL_ID)))
-            #return via the ingress port.
-            actions.append( ofproto_v1_3_parser.OFPActionOutput(OF_IN_PORT))
+        # set vlan ID to be current switch(No solid flag).
+        actions.append(ofproto_v1_3_parser.OFPActionSetField(eth_src = ExtraLayers.ReturnAndTagMAC))
+        # set vlan ID to be current switch with solid flag.
+        actions.append(
+            ofproto_v1_3_parser.OFPActionSetField(vlan_vid=retMaskedVlanID(switchID)))
+        # Send to ingress port.
+        actions.append(ofproto_v1_3_parser.OFPActionOutput(OF_IN_PORT))
 
         #return the actions list
         return actions
 
-    def getReturnAndTagActions(self,switchID, numberOfFlowEntries):
+    def getReturnAndTagActions(self,switchID):
         '''
-        Get the return and tag actions (only return actions in 3 flow entries case or the first return action for 4 flow entries case)
+        Get the return and tag actions
         :param switchID: ID of current switch
-        :param numberOfFlowEntries: 3 or 4 flow entries mode
         :return: return and tag flow entries to be installed
         '''
-        #initialize the actions set to be empty
         actions = []
-        #3 flow entries case
-        if (3 == numberOfFlowEntries):
-            #transfer to "parent" port as is (the packet already contains the switch ID's tagging)
-            actions.append(ofproto_v1_3_parser.OFPActionOutput((self.switch_to_parent_port[switchID])))
+    
+        #In 4 flow entries, the packet contains only tagging on last switch ID (inner tagging) need to add
+        #the first switch ID (outer tagging) and change the ethertype to be dirReturnNoTag.
+        # Set type of packet
+        actions.append(ofproto_v1_3_parser.OFPActionSetField(eth_src = ExtraLayers.ReturnNoTagMAC))
+        #push VLAN header
+        actions.append(ofproto_v1_3_parser.OFPActionPushVlan())
+        #set the DirectionReturn field to be dirReturnNoTag
 
-        #4 flow entries case
-        else:
-            #In 4 flow entries, the packet contains only tagging on last switch ID (inner tagging) need to add
-            #the first switch ID (outer tagging) and change the ethertype to be dirReturnNoTag.
-            # Pop vlan
-            actions.append(ofproto_v1_3_parser.OFPActionPopVlan())
-            #set the DirectionReturn field to be dirReturnNoTag
-            actions.append(ofproto_v1_3_parser.OFPActionSetField(eth_type = ExtraLayers.dirReturnNoTag))
-            # push a new VLAN with ethertype of vlan
-            actions.append(ofproto_v1_3_parser.OFPActionPushVlan(ethertype = ExtraLayers.VLAN_ID_ETHERTYPE_QINQ))
-            # set vlan ID to be current switch (last switch field)
-            actions.append(ofproto_v1_3_parser.OFPActionSetField(vlan_vid = retMaskedVlanID(switchID)))
-            #transfer to "parent" port
-            actions.append(ofproto_v1_3_parser.OFPActionOutput((self.switch_to_parent_port[switchID])))
+        #tag cuurent switch ID
+        actions.append(ofproto_v1_3_parser.OFPActionSetField(vlan_vid=retMaskedVlanID(switchID)))
+        # Send to ingress port.
+        actions.append(ofproto_v1_3_parser.OFPActionOutput((self.switch_to_parent_port[switchID])))
 
         #return the actions list
         return actions

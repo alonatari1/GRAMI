@@ -14,15 +14,13 @@ Infrastructure project files:
 
 * ActionsGenerator - Generates the actions for the controller.
 
-* Analyzer - Analyze the results online and presents them without saving to file.
+* Analyzer - Send probe packets for topology discovery in the controller, for flow entries and for network analysis. Analyze the results online and presents them without saving to file.
 
 * Controller - Controller application for Ryu.
 
 * ExtraLayers - Contains constants and creates extra layer given layers from Scapy.
 
 * myPackets- Used by Analyzer to create and analyze the information of the probe packets.
-
-* Sender - Send probe packets for topology discovery in the controller, for flow entries and for network analysis.
 
 Test related files (used to test GRAMI):
 + pingAnalyzer - Analyze the results for ping (test1).
